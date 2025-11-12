@@ -1,0 +1,35 @@
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dll
+*.log
+
+# Project artifacts
+model/
+models/
+features/
+uploads/
+tmp/
+dataset/
+dataset_landmarks
+data/
+*.pkl
+*.onnx
+*.tflite
+*.h5
+*.arff
+*.zip
+*.mp4
+*.avi
+
+# OS/IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

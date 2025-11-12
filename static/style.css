@@ -1,0 +1,8 @@
+body { font-family: system-ui, sans-serif; max-width: 720px; margin: 32px auto; line-height: 1.5; }
+h1 { margin-bottom: 16px; }
+form { display: grid; gap: 12px; padding: 16px; border: 1px solid #ddd; border-radius: 8px; }
+.row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+button { padding: 10px 16px; border: none; background: #1f7aec; color: white; border-radius: 6px; cursor: pointer; }
+label { display:block; font-weight: 600; margin-bottom: 6px; }
+input[type="number"], input[type="file"] { width: 100%; }
+#result { margin-top: 16px; font-size: 1.1rem; font-weight: 600; }

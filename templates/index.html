@@ -1,0 +1,253 @@
+<!doctype html>
+
+<html lang="en">
+
+<head>
+
+  <meta charset="utf-8" />
+  <title>Dance Form Recognition</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* --- Base & Background --- */
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      color: #e8eef9;
+      background-color: #0b0c10; /* Fallback color */
+      /* BOLD BLUE & PURPLE PHOTO BACKGROUND */
+      background-image: url('https://images.pexels.com/photos/2263436/pexels-photo-2263436.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2');
+      background-size: cover;
+      background-position: center;
+    }
+
+    /* Frosted glass overlay for readability */
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(10, 12, 16, 0.7);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      z-index: -1;
+    }
+
+    body::after { display: none; }
+
+    .container { max-width: 800px; margin: 40px auto; padding: 0 16px; position: relative; z-index: 1; }
+    header {
+      text-align: center;
+      margin-bottom: 32px;
+      animation: fadeInUp 0.8s ease-out forwards;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 42px);
+      font-weight: 700;
+      color: #fff;
+      text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+    }
+    .card {
+      background: rgba(18, 20, 26, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 20px;
+      padding: 32px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+      animation: fadeInUp 0.8s ease-out 0.2s forwards;
+      opacity: 0;
+    }
+
+    label {
+      display: block;
+      font-weight: 600;
+      margin: 20px 0 8px;
+      color: #c4d3e5;
+    }
+    .help { color: #9fb3c8; font-size: 13px; margin-top: 8px; }
+
+    .file-upload-wrapper {
+      position: relative;
+      background: rgba(14, 17, 24, 0.85);
+      border: 2px dashed rgba(255, 255, 255, 0.25);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.2s ease, border-color 0.2s ease;
+    }
+    .file-upload-wrapper:hover {
+      background: rgba(30, 35, 48, 0.9);
+      border-color: #7aa2ff;
+    }
+    #video { display: none; }
+    .file-upload-text {
+      color: #e8eef9;
+      font-weight: 500;
+    }
+    .file-upload-text span {
+      display: block;
+      font-size: 13px;
+      color: #9fb3c8;
+      margin-top: 4px;
+    }
+
+    input[type="number"], input[type="range"] {
+      width: 100%;
+      padding: 10px;
+      border-radius: 12px;
+      background: rgba(14, 17, 24, 0.9);
+      color: #e8eef9;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      outline: 0;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    input[type="number"]:focus {
+      border-color: #7aa2ff;
+      box-shadow: 0 0 10px rgba(122, 162, 255, 0.25);
+    }
+    input[type="range"] {
+      padding: 0;
+      accent-color: #7aa2ff;
+      margin-top: 8px;
+    }
+    .trim-row { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    .preview {
+      margin-top: 24px;
+      display: flex;
+      justify-content: center;
+    }
+    video {
+      max-width: 100%;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+    }
+    .notes {
+      margin-top: 32px;
+      padding-top: 24px;
+      font-size: 14px;
+      color: #9fb3c8;
+      border-top: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    .notes ul { margin: 10px 0 0 18px; padding: 0; line-height: 1.6; }
+
+    button {
+      margin-top: 28px;
+      width: 100%;
+      background: linear-gradient(145deg, #7aa2ff, #537dff);
+      border: 0; color: #071224; font-weight: 700; font-size: 16px;
+      padding: 14px 28px; border-radius: 12px; cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      box-shadow: 0 4px 15px rgba(122, 162, 255, 0.25);
+    }
+    button:hover {
+      transform: scale(1.02);
+      box-shadow: 0 8px 25px rgba(122, 162, 255, 0.4);
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(30px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+
+</head>
+
+<body>
+  <div class="container">
+    <header>
+      <h1>Dance Form Recognition</h1>
+    </header>
+
+    <div class="card">
+      <form id="uploadForm" action="/predict" method="post" enctype="multipart/form-data">
+        <label for="video">Upload Your Dance Clip</label>
+        <label for="video" class="file-upload-wrapper">
+          <div class="file-upload-text" id="fileUploadText">
+            Click to browse or drag & drop a file
+            <span>MP4, MOV, etc. • Max 30 MB</span>
+          </div>
+        </label>
+        <input id="video" type="file" name="video" accept="video/*" required>
+
+        <div class="preview" id="previewBlock" hidden>
+          <video id="player" controls playsinline></video>
+        </div>
+
+        <div id="trimBlock" hidden>
+          <label>Trim Selection</label>
+          <input id="rangeStart" type="range" min="0" value="0" step="0.1">
+          <input id="rangeEnd" type="range" min="0" value="0" step="0.1">
+          <div class="trim-row">
+            <div>
+              <label for="start">Start (s)</label>
+              <input id="start" type="number" name="start" step="0.1" min="0" value="0.0">
+            </div>
+            <div>
+              <label for="end">End (s)</label>
+              <input id="end" type="number" name="end" step="0.1" min="0" value="0.0">
+            </div>
+          </div>
+        </div>
+
+        <button type="submit">Predict Dance Form</button>
+      </form>
+
+      <div class="notes">
+        <strong>Recommendations</strong>
+        <ul>
+          <li>Keep the dancer centered and visible from head to toe.</li>
+          <li>Avoid blur, heavy shadows, and cluttered backgrounds.</li>
+          <li>Longer clips (5–10 seconds) generally yield better results.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const videoInput = document.getElementById('video');
+    const fileUploadText = document.getElementById('fileUploadText');
+    const previewBlock = document.getElementById('previewBlock');
+    const player = document.getElementById('player');
+    const trimBlock = document.getElementById('trimBlock');
+    const rangeStart = document.getElementById('rangeStart');
+    const rangeEnd = document.getElementById('rangeEnd');
+    const startInput = document.getElementById('start');
+    const endInput = document.getElementById('end');
+
+    videoInput.addEventListener('change', () => {
+      const file = videoInput.files && videoInput.files[0];
+      if (!file) {
+        previewBlock.hidden = true;
+        trimBlock.hidden = true;
+        fileUploadText.innerHTML = `Click to browse or drag & drop a file<span>MP4, MOV, etc. • Max 30 MB</span>`;
+        return;
+      }
+
+      fileUploadText.innerHTML = `${file.name}<span>Click again to change the file</span>`;
+
+      const url = URL.createObjectURL(file);
+      player.src = url;
+      player.load();
+      previewBlock.hidden = false;
+
+      player.onloadedmetadata = () => {
+        const duration = player.duration || 0;
+        rangeStart.max = duration;
+        rangeEnd.max = duration;
+        rangeEnd.value = duration.toFixed(1);
+        startInput.value = "0.0";
+        endInput.value = duration.toFixed(1);
+        trimBlock.hidden = false;
+      };
+    });
+
+    rangeStart.addEventListener('input', () => { startInput.value = parseFloat(rangeStart.value).toFixed(1); });
+    rangeEnd.addEventListener('input', () => { endInput.value = parseFloat(rangeEnd.value).toFixed(1); });
+    startInput.addEventListener('input', () => { rangeStart.value = startInput.value || 0; });
+    endInput.addEventListener('input', () => { rangeEnd.value = endInput.value || 0; });
+  </script>
+</body>
+</html>

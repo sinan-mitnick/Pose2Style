@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Prediction Result</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      color: #e8eef9;
+      background-color: #0b0c10;
+      background-image: url('https://w0.peakpx.com/wallpaper/705/917/HD-wallpaper-mountains-grids-polygon-low-poly-mountains-polygon-artist-artwork-digital-art.jpg');
+      background-size: cover;
+      background-position: center;
+      background-attachment: fixed;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(10,12,16,0.6);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: -1;
+    }
+    .container {
+      max-width: 900px;
+      width: 100%;
+      padding: 0 16px;
+      position: relative;
+      z-index: 1;
+    }
+    .card {
+      position: relative;
+      background: rgba(20,22,28,0.6);
+      backdrop-filter: blur(25px);
+      -webkit-backdrop-filter: blur(25px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      padding: 40px;
+      box-shadow: 0 8px 32px 0 rgba(0,0,0,0.37);
+      text-align: center;
+      overflow: hidden;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: 22px;
+      padding: 1px;
+      background: linear-gradient(135deg, rgba(255,110,199,0.6), rgba(122,162,255,0.6), rgba(0,229,255,0.6));
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      z-index: 0;
+    }
+    .card > * {
+      position: relative;
+      z-index: 1;
+    }
+    .result-header {
+      font-size: 16px;
+      font-weight: 500;
+      color: #becce1;
+      margin-bottom: 8px;
+      letter-spacing: .5px;
+      text-shadow: 0 1px 3px rgba(0,0,0,.5);
+    }
+    .result-label {
+      font-size: clamp(40px,6vw,64px);
+      font-weight: 700;
+      color: #fff;
+      margin: 0 0 32px;
+      text-transform: capitalize;
+      text-shadow: 0 2px 8px rgba(0,0,0,.7);
+    }
+    .description {
+      font-size: 17px;
+      line-height: 1.7;
+      color: #e1e8f0;
+      margin: 0 0 32px;
+      text-align: left;
+      border-top: 1px solid rgba(255,255,255,.15);
+      padding-top: 32px;
+      text-shadow: 0 1px 3px rgba(0,0,0,.5);
+    }
+    .description h3 {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      font-weight: 700;
+      color: #fff;
+      margin: 0 0 20px;
+    }
+    .description h3 svg {
+      width: 24px;
+      height: 24px;
+      color: #becce1;
+      filter: drop-shadow(0 1px 3px rgba(0,0,0,.5));
+    }
+    .button-link {
+      background: linear-gradient(145deg,#7aa2ff,#537dff);
+      border: none;
+      color: #fff;
+      font-weight: 700;
+      font-size: 16px;
+      padding: 14px 28px;
+      border-radius: 12px;
+      text-decoration: none;
+      display: inline-block;
+      cursor: pointer;
+      transition: transform .2s ease, box-shadow .2s ease;
+      box-shadow: 0 4px 15px rgba(83,125,255,.3);
+    }
+    .button-link:hover {
+      transform: translateY(-3px) scale(1.02);
+      box-shadow: 0 8px 25px rgba(83,125,255,.5);
+    }
+
+    /* Explain section */
+    .explain-wrapper {
+      margin-top: 24px;
+      text-align: center;
+    }
+    .explain-toggle {
+      margin-bottom: 10px;
+      background: transparent;
+      border-radius: 12px;
+      padding: 10px 22px;
+      border: 1px solid rgba(122,162,255,0.7);
+      color: #d5e0ff;
+      font-weight: 500;
+      font-size: 14px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+      backdrop-filter: blur(6px);
+    }
+    .explain-toggle span.icon {
+      font-size: 16px;
+      transform-origin: center;
+      transition: transform 0.2s ease;
+    }
+    .explain-toggle:hover {
+      background: rgba(122,162,255,0.15);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+      transform: translateY(-1px);
+    }
+    .explain-panel {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.35s ease;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.07);
+      background: radial-gradient(circle at top left, rgba(122,162,255,0.12), transparent),
+                  radial-gradient(circle at bottom right, rgba(0,229,255,0.06), transparent),
+                  rgba(7,10,16,0.92);
+      padding: 0 18px;
+      margin-top: 4px;
+      text-align: left;
+    }
+    .explain-panel.open {
+      padding-top: 18px;
+      padding-bottom: 20px;
+    }
+    .explain-panel h3 {
+      margin: 0 0 10px;
+      font-size: 17px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+    .explain-panel p {
+      margin: 4px 0 14px;
+      font-size: 14px;
+      color: #d0dbf4;
+      line-height: 1.7;
+    }
+    .frame-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 10px;
+    }
+    .frame-block {
+      flex: 1 1 180px;
+      min-width: 0;
+      background: rgba(9,11,18,0.96);
+      border-radius: 12px;
+      padding: 10px;
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+    }
+    .frame-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #9fb4ff;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .frame-block img {
+      width: 100%;
+      border-radius: 8px;
+      display: block;
+      object-fit: contain;
+      max-height: 220px;
+    }
+
+    /* Visual explanation blocks */
+    .viz-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-top: 14px;
+    }
+    .viz-block {
+      background: rgba(6,9,15,0.98);
+      border-radius: 14px;
+      padding: 10px 12px 12px;
+      border: 1px solid rgba(255,255,255,0.05);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    }
+    .viz-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #9fb4ff;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 4px;
+    }
+    .viz-text {
+      font-size: 12px;
+      color: #cbd7ff;
+      margin: 0 0 6px;
+      line-height: 1.7;
+    }
+    .viz-media {
+      width: 100%;
+      border-radius: 9px;
+      display: block;
+      object-fit: contain;
+      max-height: 210px;
+      margin-top: 4px;
+    }
+    .why-block {
+      margin-top: 14px;
+      padding: 10px 12px 12px;
+      border-radius: 14px;
+      background: radial-gradient(circle at top left, rgba(122,162,255,0.12), transparent),
+                  rgba(4,7,12,0.98);
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+    .why-block .viz-title {
+      margin-bottom: 4px;
+    }
+
+    /* Confidence section (inside explain panel only) */
+    .confidence-section {
+      margin-top: 18px;
+      padding: 14px 14px 16px;
+      border-radius: 16px;
+      background: radial-gradient(circle at top, rgba(122,162,255,0.14), transparent),
+                  rgba(5,8,14,0.97);
+      border: 1px solid rgba(255,255,255,0.06);
+      text-align: left;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+    }
+    .confidence-section h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+    .confidence-section p {
+      margin: 2px 0 8px;
+      font-size: 13px;
+      color: #c4d3ff;
+      line-height: 1.7;
+    }
+    .confidence-chart-wrap {
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 12px;
+      background: rgba(7,10,16,0.98);
+      border: 1px solid rgba(255,255,255,0.04);
+    }
+    .confidence-chart-wrap img {
+      width: 100%;
+      max-height: 260px;
+      object-fit: contain;
+      border-radius: 8px;
+      display: block;
+    }
+
+    @media (max-width: 600px) {
+      .card {
+        padding: 26px 18px 28px;
+      }
+      .description {
+        font-size: 15px;
+      }
+      .frame-block img,
+      .viz-media {
+        max-height: 180px;
+      }
+      .confidence-chart-wrap img {
+        max-height: 220px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="result-header">Predicted Dance Form</div>
+      <h1 class="result-label">{{ predicted_label }}</h1>
+
+      {% if description %}
+      <div class="description">
+        <h3>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M12 20c4.418 0 8-3.582 8-8s-3.582-8-8-8-8 3.582-8 8 3.582 8 8 8z"></path>
+            <path d="M12 16v-4"></path>
+            <path d="M12 8h.01"></path>
+          </svg>
+          About this dance
+        </h3>
+        <p>{{ description }}</p>
+      </div>
+      {% else %}
+      <p style="color:#becce1; margin-bottom:32px;">No description available.</p>
+      {% endif %}
+
+      {% if best_raw_frame and best_annotated_frame %}
+      <div class="explain-wrapper">
+        <button id="toggleExplain" class="explain-toggle">
+          <span class="icon">⟶</span>
+          Wanna know how it worked?
+        </button>
+
+        <div id="explainPanel" class="explain-panel">
+          <h3>How your clip was analyzed</h3>
+          <p>
+            Your video segment is broken into multiple frames. From those, the model focuses on frames where your pose is clear
+            and motion is informative. Here’s one of the strongest frames it relied on.
+          </p>
+
+          <div class="frame-row">
+            <div class="frame-block">
+              <div class="frame-label">Original frame</div>
+              <img src="/{{ best_raw_frame }}" alt="Key frame from your uploaded video">
+            </div>
+            <div class="frame-block">
+              <div class="frame-label">Pose &amp; keypoints</div>
+              <img src="/{{ best_annotated_frame }}" alt="Annotated pose and keypoints">
+            </div>
+          </div>
+
+          <p>
+            From this frame, we build a high-dimensional feature vector: normalized joint positions, key limb angles,
+            and hand landmark patterns. These are passed into our classifier, which compares them
+            against learned patterns from each dance style and picks the most likely match —
+            here predicted as <strong>{{ predicted_label }}</strong>.
+          </p>
+
+          <div class="viz-grid">
+            {% if pose_overlay_name %}
+            <div class="viz-block">
+              <div class="viz-title">Model’s pose view</div>
+              <p class="viz-text">
+                This playback shows how the model “sees” your movement: as a skeleton of joints and angles,
+                ignoring background, clothes, and face.
+              </p>
+          <video
+  src="/plots/{{ pose_overlay_name }}"
+  autoplay
+  loop
+  muted
+  playsinline
+  controls
+  class="viz-media">
+</video>
+
+            </div>
+            {% endif %}
+
+            {% if timeline_name %}
+            <div class="viz-block">
+              <div class="viz-title">Prediction through the clip</div>
+              <p class="viz-text">
+                Each curve tracks how confidence changed over time. You’ll see
+                <strong>{{ predicted_label }}</strong> dominating across the key frames.
+              </p>
+              <img
+                src="/tmp/plots/{{ timeline_name }}"
+                alt="Prediction confidence over time"
+                class="viz-media">
+            </div>
+            {% endif %}
+          </div>
+
+          {% if plot_name %}
+          <div class="confidence-section">
+            <h3>How confident was the model?</h3>
+            <p>
+              For every valid frame, the model scores all dance styles. The bars below show the
+              <strong>average confidence</strong> across those frames.
+              The tallest bar is the style the model finally chose as <strong>{{ predicted_label }}</strong>.
+            </p>
+
+            <p>
+              <strong>Why {{ predicted_label }}?</strong>
+              {% if predicted_label == "Belly Dance" %}
+                The pose points highlight strong hip isolations, controlled torso work, and flowing arm lines centered around the core,
+                which aligns with Belly Dance patterns learned during training.
+              {% elif predicted_label == "Hip Hop" %}
+                The model picked up grounded posture, bends, isolations, and sharp dynamic shifts that are typical of Hip Hop movement signatures.
+              {% elif predicted_label == "Bhangra" %}
+                Repeated high knee lifts, energetic shoulder work, extended arms, and upright chest matched Bhangra-style pose patterns.
+              {% elif predicted_label == "Garba" %}
+                Circular body alignment, rhythmic side steps, hand extensions, and rotational patterns around the center hinted strongly at Garba.
+              {% elif predicted_label == "Salsa" %}
+                Alternating weight shifts, hip-led motion, and partner-like orientation matched Salsa-style cues.
+              {% elif predicted_label == "Kathak" %}
+                Upright spine, precise footwork hints, graceful arm lines, and storytelling-style gestures aligned with Kathak features.
+              {% elif predicted_label == "Bharatanatyam" %}
+                Deep stance, geometric arm shapes, and stable torso alignment matched Bharatanatyam patterns.
+              {% elif predicted_label == "Ballet" %}
+                Long extensions, lifted torso, and balanced vertical lines aligned closely with Ballet technique.
+              {% else %}
+                The dominant joint positions and limb-angle patterns from your frames most closely matched this style’s learned signature.
+              {% endif %}
+            </p>
+
+            <div class="confidence-chart-wrap">
+              <img src="/tmp/plots/{{ plot_name }}" alt="Average confidence per dance class">
+            </div>
+          </div>
+          {% endif %}
+
+          <div class="why-block">
+            <div class="viz-title">In short</div>
+            <p class="viz-text">
+              The model doesn’t guess from vibes. It locks onto your body geometry, motion pattern,
+              and key joints that define each style, then chooses the dance form whose learned signature
+              best matches the way you moved in this clip.
+            </p>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <div style="margin-top:24px;">
+        <a href="/" class="button-link">Back to Home</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const btn = document.getElementById('toggleExplain');
+      const panel = document.getElementById('explainPanel');
+
+      if (!btn || !panel) return;
+
+      function setOpen(open) {
+        if (open) {
+          panel.classList.add('open');
+          panel.style.maxHeight = panel.scrollHeight + 'px';
+          btn.innerHTML = '<span class="icon">⟵</span>Hide how it worked';
+        } else {
+          panel.classList.remove('open');
+          panel.style.maxHeight = null;
+          btn.innerHTML = '<span class="icon">⟶</span>Wanna know how it worked?';
+        }
+      }
+
+      let isOpen = false;
+      btn.addEventListener('click', function () {
+        isOpen = !isOpen;
+        setOpen(isOpen);
+      });
+    });
+  </script>
+</body>
+</html>
