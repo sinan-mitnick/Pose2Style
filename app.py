@@ -5,14 +5,13 @@ import mediapipe as mp
 import numpy as np
 import joblib
 from statistics import mode
-from flask import Flask, render_template, request, send_from_directory, jsonify
+from flask import Flask, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-import glob
 
 DANCE_DESCRIPTIONS = {
     "Kathak": "Kathak is one of the ten major forms of Indian classical dance. Originating from the nomadic bards of ancient northern India, its name is derived from the Sanskrit word 'katha' meaning 'story'. The dance form is characterized by intricate footwork, rhythmic patterns, and expressive storytelling through gestures and facial expressions.",
@@ -22,7 +21,15 @@ DANCE_DESCRIPTIONS = {
     "Garba": "Garba is a folk dance from Gujarat, India, traditionally performed in a circle around a lamp or image of the goddess. It uses claps, spins, and coordinated footwork with rhythmic hand movements.",
     "Bhangra": "Bhangra is an energetic folk dance from Punjab, known for powerful shoulder movements, high knee lifts, kicks, and rhythmic hops performed to dhol-driven beats.",
     "Hip Hop": "Hip hop dance is a street style rooted in funk and urban culture, featuring grooves, isolations, popping, locking, breaking, and freestyle expression.",
-    "Belly Dance": "Belly dance is a Middle Eastern expressive dance style emphasizing fluid torso movements, hip isolations, and rhythmic articulation performed to traditional or fusion music."
+    "Belly Dance": "Belly dance is a Middle Eastern expressive dance style emphasizing fluid torso movements, hip isolations, and rhythmic articulation performed to traditional or fusion music.",
+    "Breakdance": "Break Dance (B-boying/B-girling) is an athletic street dance originating from the Bronx, New York. It features four main elements: toprock (upright movements), downrock (footwork on the floor), power moves (acrobatics like headspins and flares), and freezes (stylish poses).",
+    "Ghoomar": "Ghoomar is a traditional folk dance of the Bhil tribe from Rajasthan, India, often performed by women in swirling robes. It involves graceful circular movements, deep squats, and rhythmic steps, accelerating as the dance progresses.",
+    "Odissi": "Odissi is one of the eight classical dance forms of India, originating from the temples of Odisha. It is characterized by the Tribhangi (three-bend posture) and Chowka (square stance), featuring fluid movements, beautiful sculptural poses, and expressive storytelling (Abhinaya).",
+    "Flamenco": "Flamenco is an expressive Spanish art form that combines guitar, singing, handclaps, and percussive footwork with proud, dramatic body posture.",
+    "Waltz": "Waltz is a smooth ballroom dance in 3/4 time characterized by rise-and-fall motion and graceful, flowing rotary movements.",
+    # Optional: if your model has these classes, you can add descriptions:
+    "Samba": "Samba is a lively Brazilian dance characterized by fast footwork, hip action, and rhythmic bounce, typically performed to upbeat samba music.",
+    "Tango": "Tango is a dramatic partner dance originating from Argentina, marked by sharp movements, close embrace, and expressive leg actions."
 }
 
 # --- Configuration ---
@@ -59,105 +66,172 @@ try:
     clf = joblib.load(MODEL_PATH)
     label_encoder = joblib.load(ENC_PATH)
     scaler = joblib.load(SCALER_PATH)
+    # Feature dimension must match train_model.py (230)
     expected_dim = int(getattr(scaler, "n_features_in_", None) or scaler.mean_.shape[0])
-    # Make labels title-case for display (assumes training labels were lowercase)
+
+    # Make labels display in Title Case
     label_encoder.classes_ = np.array([c.title() for c in label_encoder.classes_])
+
     print("✅ All model artifacts loaded successfully.")
+    print("Expected feature dimension:", expected_dim)
 except Exception as e:
     print(f"❌ Error loading artifacts: {e}. Please run train_model.py first.")
 
-# --- Feature Extraction ---
+
+# --- Image descriptor helper (MATCHES train_model.py, 230 dims total) ---
+def extract_image_features_for_descriptor(img_bgr: np.ndarray) -> np.ndarray:
+    """
+    Uses WEAK image features:
+        HSV histogram = 4x4x4 = 64 dims
+        Edge histogram = 8 bins = 8 dims
+    (Total image features = 72)
+    """
+    img_resized = cv2.resize(img_bgr, (256, 256), interpolation=cv2.INTER_AREA)
+
+    # HSV histogram (coarse)
+    hsv = cv2.cvtColor(img_resized, cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist(
+        [hsv],
+        [0, 1, 2],
+        None,
+        [4, 4, 4],                # 64 dims
+        [0, 180, 0, 256, 0, 256]
+    )
+    hist = cv2.normalize(hist, hist).flatten().astype(np.float32)
+
+    # Edge orientations (8 bins)
+    gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    mag, ang = cv2.cartToPolar(gx, gy, angleInDegrees=True)
+
+    mask = mag > (0.1 * mag.max() + 1e-6)
+    valid = ang[mask]
+
+    if valid.size == 0:
+        edge_hist = np.zeros(8, dtype=np.float32)
+    else:
+        edge_hist, _ = np.histogram(valid, bins=8, range=(0, 180), density=True)
+        edge_hist = edge_hist.astype(np.float32)
+
+    return np.concatenate([hist, edge_hist]).astype(np.float32)
+
+
+# --- Feature extraction for a single frame (MUST MATCH train_model.py layout) ---
 def extract_features_from_frame(frame, pose_estimator, hand_estimator, mp_pose_mod, mp_hands_mod):
-    """Returns (feature_vector or None, annotated_frame)."""
+    """
+    Returns (feature_vector or None, annotated_frame).
+    Must produce EXACT 230 dims:
+      Pose vector:        66
+      Angles:             8
+      Left hand:          42
+      Right hand:         42
+      Image histogram:    64
+      Edge histogram:     8
+      -----------------------
+      TOTAL =            230 dims
+    """
     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pose_results = pose_estimator.process(img_rgb)
     hand_results = hand_estimator.process(img_rgb)
 
     annotated_frame = frame.copy()
 
+    # Draw landmarks
     if pose_results.pose_landmarks:
         mp_drawing.draw_landmarks(
             annotated_frame, pose_results.pose_landmarks, mp_pose_mod.POSE_CONNECTIONS
         )
-
     if hand_results.multi_hand_landmarks:
-        for hand_landmarks in hand_results.multi_hand_landmarks:
+        for hl in hand_results.multi_hand_landmarks:
             mp_drawing.draw_landmarks(
-                annotated_frame, hand_landmarks, mp_hands_mod.HAND_CONNECTIONS
+                annotated_frame, hl, mp_hands_mod.HAND_CONNECTIONS
             )
 
+    # MUST have pose
     if not pose_results.pose_landmarks:
         return None, annotated_frame
 
+    # Pose vector ----------
     pose_lms = pose_results.pose_landmarks.landmark
     pose_coords = np.array([(lm.x, lm.y) for lm in pose_lms], dtype=np.float32)
+    hip = (pose_coords[23] + pose_coords[24]) / 2
+    pose_coords -= hip
+    torso = np.linalg.norm(pose_coords[11] - pose_coords[23]) + 1e-6
+    pose_coords /= torso
+    pose_vec = pose_coords.flatten()   # 66
 
-    # Normalize by hip center and torso size
-    hip_center = (pose_coords[23] + pose_coords[24]) / 2.0
-    pose_coords -= hip_center
-    torso_size = np.linalg.norm(pose_coords[11] - pose_coords[23]) + 1e-6
-    pose_coords /= torso_size
-
-    pose_vector = pose_coords.flatten()
-
-    def angle_between(a, b, c):
+    # Angles ----------
+    def angle(a, b, c):
         a, b, c = np.array(a), np.array(b), np.array(c)
-        ba = a - b
-        bc = c - b
+        ba, bc = a - b, c - b
         denom = (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
-        cos_v = np.dot(ba, bc) / denom
-        return np.degrees(np.arccos(np.clip(cos_v, -1.0, 1.0)))
+        cosv = np.dot(ba, bc) / denom
+        return np.degrees(np.arccos(np.clip(cosv, -1, 1)))
 
     def pt(i):
         return (pose_coords[i][0], pose_coords[i][1])
 
     try:
-        angles = [
-            angle_between(pt(11), pt(13), pt(15)),
-            angle_between(pt(12), pt(14), pt(16)),
-            angle_between(pt(23), pt(25), pt(27)),
-            angle_between(pt(24), pt(26), pt(28)),
-            angle_between(pt(11), pt(23), pt(25)),
-            angle_between(pt(12), pt(24), pt(26)),
-            angle_between(pt(13), pt(11), pt(23)),
-            angle_between(pt(14), pt(12), pt(24)),
-        ]
-        angle_vector = np.array(angles, dtype=np.float32)
+        angs = np.array([
+            angle(pt(11), pt(13), pt(15)),
+            angle(pt(12), pt(14), pt(16)),
+            angle(pt(23), pt(25), pt(27)),
+            angle(pt(24), pt(26), pt(28)),
+            angle(pt(11), pt(23), pt(25)),
+            angle(pt(12), pt(24), pt(26)),
+            angle(pt(13), pt(11), pt(23)),
+            angle(pt(14), pt(12), pt(24)),
+        ], dtype=np.float32)
     except Exception:
-        angle_vector = np.zeros(8, dtype=np.float32)
+        angs = np.zeros(8, dtype=np.float32)
 
-    left_hand_vector = np.zeros(21 * 2, dtype=np.float32)
-    right_hand_vector = np.zeros(21 * 2, dtype=np.float32)
+    # Hands ----------
+    left_hand = np.zeros(42, dtype=np.float32)
+    right_hand = np.zeros(42, dtype=np.float32)
 
     if hand_results.multi_hand_landmarks and hand_results.multi_handedness:
-        for hand_landmarks, handedness in zip(
-            hand_results.multi_hand_landmarks, hand_results.multi_handedness
-        ):
-            coords = np.array(
-                [(lm.x, lm.y) for lm in hand_landmarks.landmark], dtype=np.float32
-            )
+        for hl, hd in zip(hand_results.multi_hand_landmarks, hand_results.multi_handedness):
+            coords = np.array([(lm.x, lm.y) for lm in hl.landmark], dtype=np.float32)
             wrist = coords[0]
             coords -= wrist
-            palm_size = np.linalg.norm(coords[0] - coords[9]) + 1e-6
-            coords /= palm_size
+            size = np.linalg.norm(coords[0] - coords[9]) + 1e-6
+            coords /= size
             flat = coords.flatten()
-            hand_type = handedness.classification[0].label
-            if hand_type == "Left":
-                left_hand_vector = flat
+            if hd.classification[0].label == "Left":
+                left_hand = flat
             else:
-                right_hand_vector = flat
+                right_hand = flat
 
-    feats = np.concatenate(
-        [pose_vector, angle_vector, left_hand_vector, right_hand_vector]
-    )
-    return feats, annotated_frame
+    pose_hand_feats = np.concatenate([pose_vec, angs, left_hand, right_hand])  # 158
 
-# --- Prediction Logic ---
-def predict_video(video_path, start_time, end_time, stride=5):
+    # Image features ----------
+    img_feats = extract_image_features_for_descriptor(frame)  # 72
+
+    final = np.concatenate([pose_hand_feats, img_feats]).astype(np.float32)
+
+    if expected_dim is not None and final.shape[0] != expected_dim:
+        print("❌ Feature dim mismatch:", final.shape[0], "!=", expected_dim)
+        return None, annotated_frame
+
+    return final, annotated_frame
+
+
+# --- Prediction Logic (Turbo mode) ---
+def predict_video(video_path, start_time, end_time, stride=12):
+    """
+    Turbo mode:
+      - model_complexity=0 (faster)
+      - max_num_hands=1
+      - stride=12 (process every 12th frame)
+      - still uses same 230-dim descriptor & XGBoost model
+    """
     if not all([clf is not None, label_encoder is not None, scaler is not None, expected_dim]):
         return "Model not loaded.", None, None, None, None, None
 
-    # Clean temp dirs
+    # Clean temp dirs (ONLY tmp/, not dataset)
     for d in [FRAMES_DIR, ANNOTATED_FRAMES_DIR, PLOTS_DIR]:
         if os.path.exists(d):
             shutil.rmtree(d, ignore_errors=True)
@@ -179,20 +253,28 @@ def predict_video(video_path, start_time, end_time, stride=5):
 
     preds_raw = []
     probs_list = []
-    frame_meta = []  # list of (frame_idx, probs) for valid frames
+    frame_meta = []
 
     skipped_dim = 0
     detected_frames = 0
 
+    best_frame_data = {
+        'raw_frame': None,
+        'annotated_frame': None,
+        'index': -1,
+        'confidence': -1.0
+    }
+
+    # Turbo MediaPipe settings
     with mp_pose.Pose(
-        model_complexity=1,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5
+        model_complexity=0,
+        min_detection_confidence=0.4,
+        min_tracking_confidence=0.4
     ) as pose, mp_hands.Hands(
         static_image_mode=False,
-        max_num_hands=2,
-        min_detection_confidence=0.7,
-        min_tracking_confidence=0.5
+        max_num_hands=1,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.4
     ) as hands:
         while True:
             if current_frame_idx >= end_frame:
@@ -203,23 +285,9 @@ def predict_video(video_path, start_time, end_time, stride=5):
                 break
 
             if current_frame_idx % stride == 0:
-                # Save raw frame
-                raw_frame_path = os.path.join(
-                    FRAMES_DIR, f"frame_{current_frame_idx:06d}.jpg"
-                )
-                cv2.imwrite(raw_frame_path, frame)
-
-                # Extract features + annotated frame
                 features, annotated_frame = extract_features_from_frame(
                     frame, pose, hands, mp_pose, mp_hands
                 )
-
-                if annotated_frame is not None:
-                    annotated_frame_path = os.path.join(
-                        ANNOTATED_FRAMES_DIR,
-                        f"frame_{current_frame_idx:06d}_annotated.jpg",
-                    )
-                    cv2.imwrite(annotated_frame_path, annotated_frame)
 
                 if features is not None and features.shape[0] == expected_dim:
                     scaled = scaler.transform([features])
@@ -229,8 +297,15 @@ def predict_video(video_path, start_time, end_time, stride=5):
                     preds_raw.append(pred)
                     probs_list.append(probs)
                     frame_meta.append((current_frame_idx, probs))
-
                     detected_frames += 1
+
+                    current_confidence = probs[pred]
+                    if current_confidence > best_frame_data['confidence']:
+                        best_frame_data['confidence'] = current_confidence
+                        best_frame_data['index'] = current_frame_idx
+                        best_frame_data['raw_frame'] = frame.copy()
+                        best_frame_data['annotated_frame'] = annotated_frame.copy()
+
                 elif features is not None:
                     skipped_dim += 1
 
@@ -239,16 +314,35 @@ def predict_video(video_path, start_time, end_time, stride=5):
     cap.release()
 
     if not preds_raw:
-        print("Prediction failed: No valid frames.")
+        print("Prediction failed: No valid frames with matching feature dimension.")
         return "Prediction failed: No pose detected in the trimmed segment.", None, None, None, None, None
 
-    # Final prediction: mode of per-frame predictions
     try:
         final_pred_idx = mode(preds_raw)
-    except:
+    except Exception:
         final_pred_idx = preds_raw[-1]
 
     label = label_encoder.inverse_transform([final_pred_idx])[0]
+
+    best_raw_frame_url = None
+    best_annotated_frame_url = None
+
+    if best_frame_data['index'] != -1:
+        best_frame_idx = best_frame_data['index']
+
+        raw_frame_path = os.path.join(
+            FRAMES_DIR, f"frame_{best_frame_idx:06d}.jpg"
+        )
+        ann_frame_path = os.path.join(
+            ANNOTATED_FRAMES_DIR,
+            f"frame_{best_frame_idx:06d}_annotated.jpg",
+        )
+
+        cv2.imwrite(raw_frame_path, best_frame_data['raw_frame'])
+        cv2.imwrite(ann_frame_path, best_frame_data['annotated_frame'])
+
+        best_raw_frame_url = raw_frame_path.replace("\\", "/")
+        best_annotated_frame_url = ann_frame_path.replace("\\", "/")
 
     # --- Average probabilities bar chart ---
     avg_probs = np.mean(probs_list, axis=0) * 100
@@ -283,93 +377,54 @@ def predict_video(video_path, start_time, end_time, stride=5):
         )
 
     plt.tight_layout()
-
     plot_name = "average_confidence_chart.png"
     plot_path = os.path.join(PLOTS_DIR, plot_name)
     plt.savefig(plot_path)
     plt.close()
 
-    # --- Pick best frame for explanation ---
-    best_raw_frame_url = None
-    best_annotated_frame_url = None
-
-    if frame_meta:
-        # frame where model is most confident for final predicted class
-        best_frame_idx, _ = max(
-            frame_meta,
-            key=lambda item: item[1][final_pred_idx]
-        )
-
-        raw_frame_path = os.path.join(
-            FRAMES_DIR, f"frame_{best_frame_idx:06d}.jpg"
-        )
-        ann_frame_path = os.path.join(
-            ANNOTATED_FRAMES_DIR,
-            f"frame_{best_frame_idx:06d}_annotated.jpg",
-        )
-
-        if os.path.exists(raw_frame_path) and os.path.exists(ann_frame_path):
-            best_raw_frame_url = raw_frame_path.replace("\\", "/")
-            best_annotated_frame_url = ann_frame_path.replace("\\", "/")
-
-    # --- Pose overlay video from annotated frames ---
+    # --- Timeline plot (top-1 + top-2 class) ---
     pose_overlay_name = None
-    annotated_files = sorted(
-        glob.glob(os.path.join(ANNOTATED_FRAMES_DIR, "*_annotated.jpg"))
-    )
-    if annotated_files:
-        first = cv2.imread(annotated_files[0])
-        if first is not None:
-            h, w, _ = first.shape
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            pose_overlay_name = "pose_overlay.mp4"
-            pose_overlay_path = os.path.join(PLOTS_DIR, pose_overlay_name)
-
-            # fps/stride so playback speed roughly matches sampled frames
-            out = cv2.VideoWriter(
-                pose_overlay_path, fourcc, max(1, int(fps / stride) or 1), (w, h)
-            )
-            for fpath in annotated_files:
-                frame = cv2.imread(fpath)
-                if frame is not None:
-                    out.write(frame)
-            out.release()
-        else:
-            pose_overlay_name = None
-
-    # --- Confidence timeline over the clip ---
     timeline_name = None
+
     if frame_meta:
         timeline_name = "confidence_timeline.png"
         timeline_path = os.path.join(PLOTS_DIR, timeline_name)
 
         times = [idx / fps for idx, _ in frame_meta]
-        final_conf = [probs[final_pred_idx] * 100 for _, probs in frame_meta]
 
-        # optional: second best class for comparison
-        second_conf = None
+        # main predicted class confidence
+        main_conf = [p[final_pred_idx] * 100 for _, p in frame_meta]
+
+        # second-best class confidence
+        second_conf = []
         second_label = None
-        if avg_probs.size > 1:
-            sorted_indices = np.argsort(avg_probs)
-            if len(sorted_indices) >= 2:
-                second_idx = int(sorted_indices[-2])
-                second_label = all_classes[second_idx]
-                second_conf = [probs[second_idx] * 100 for _, probs in frame_meta]
 
-        plt.figure(figsize=(8, 4))
-        plt.plot(times, final_conf, label=str(label), linewidth=2)
-        if second_conf is not None:
-            plt.plot(times, second_conf, linestyle='--', label=str(second_label), linewidth=1.4)
+        for _, p in frame_meta:
+            rank = np.argsort(p)[::-1]
+            if len(rank) > 1:
+                second_idx = rank[1]
+                second_conf.append(p[second_idx] * 100)
+                if second_label is None:
+                    second_label = label_encoder.inverse_transform([second_idx])[0]
+            else:
+                second_conf.append(0.0)
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(times, main_conf, label=f"Predicted: {label}", linewidth=2, color="orange")
+        if second_label is not None:
+            plt.plot(times, second_conf, label=f"Second best: {second_label}", linewidth=2, color="blue")
+
         plt.xlabel("Time (s)")
         plt.ylabel("Confidence (%)")
         plt.ylim(0, 100)
-        plt.title("Prediction confidence over time")
+        plt.title("Prediction Confidence Over Time")
         plt.legend()
         plt.tight_layout()
         plt.savefig(timeline_path)
         plt.close()
 
     print(f"Frames with detections: {detected_frames}, skipped (dim mismatch): {skipped_dim}")
+
     return (
         label,
         plot_name,
@@ -379,10 +434,12 @@ def predict_video(video_path, start_time, end_time, stride=5):
         timeline_name,
     )
 
+
 # --- Routes ---
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
+
 
 @app.route("/predict", methods=["POST"])
 def predict():
@@ -431,14 +488,16 @@ def predict():
         timeline_name=timeline_name,
     )
 
+
 @app.route('/<path:filename>')
-def serve_static(filename):
-    """Serve files from tmp/* so result.html can access frames, plots, overlays."""
+def serve_tmp(filename):
+    # Serve files under tmp/ (frames, annotated_frames)
     if filename.startswith(TMP_DIR + '/'):
         dir_name = os.path.dirname(filename)
         base_name = os.path.basename(filename)
         return send_from_directory(dir_name, base_name)
     return "File not found.", 404
+
 
 @app.route('/plots/<path:filename>')
 def serve_plots(filename):
@@ -448,7 +507,8 @@ def serve_plots(filename):
     if not os.path.exists(abs_file):
         print("!!! file missing")
         return "not found", 404
-    return send_from_directory(abs_dir, filename, mimetype='video/mp4', as_attachment=False)
+    return send_from_directory(abs_dir, filename, as_attachment=False)
+
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
