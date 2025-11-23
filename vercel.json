@@ -3,7 +3,11 @@
     "app.py": {
       "runtime": "python3.11",
       "maxDuration": 60,
-      "memory": 2048
+      "memory": 2048,
+      "includeFiles": [ // Adding this is good practice for Vercel functions
+        "model/**",
+        "templates/**"
+      ]
     }
   },
   "rewrites": [
