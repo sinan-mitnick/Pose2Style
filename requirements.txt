@@ -7,3 +7,5 @@ numpy==1.26.4
 joblib==1.4.2
 tqdm==4.66.4
 gunicorn==23.0.0
+boto3
+uuid # Not strictly necessary as part of the library, but good practice if used frequently

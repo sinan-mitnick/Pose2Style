@@ -1,0 +1,19 @@
+{
+  "functions": {
+    "app.py": {
+      "runtime": "python3.11",
+      "maxDuration": 60,
+      "memory": 2048
+    }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "app.py" }
+  ],
+  "installCommand": "pip install -r requirements.txt",
+  "builds": [
+    {
+      "src": "app.py",
+      "use": "@vercel/python"
+    }
+  ]
+}

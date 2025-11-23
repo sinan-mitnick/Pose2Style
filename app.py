@@ -5,13 +5,18 @@ import mediapipe as mp
 import numpy as np
 import joblib
 from statistics import mode
-from flask import Flask, render_template, request, send_from_directory
+from flask import Flask, render_template, request
 from werkzeug.utils import secure_filename
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+# --- NEW IMPORTS FOR S3 AND TEMPORARY FILE HANDLING ---
+import io
+import uuid
+import boto3 
+# -----------------------------------------------------
 
 DANCE_DESCRIPTIONS = {
     "Kathak": "Kathak is one of the ten major forms of Indian classical dance. Originating from the nomadic bards of ancient northern India, its name is derived from the Sanskrit word 'katha' meaning 'story'. The dance form is characterized by intricate footwork, rhythmic patterns, and expressive storytelling through gestures and facial expressions.",
@@ -27,29 +32,37 @@ DANCE_DESCRIPTIONS = {
     "Odissi": "Odissi is one of the eight classical dance forms of India, originating from the temples of Odisha. It is characterized by the Tribhangi (three-bend posture) and Chowka (square stance), featuring fluid movements, beautiful sculptural poses, and expressive storytelling (Abhinaya).",
     "Flamenco": "Flamenco is an expressive Spanish art form that combines guitar, singing, handclaps, and percussive footwork with proud, dramatic body posture.",
     "Waltz": "Waltz is a smooth ballroom dance in 3/4 time characterized by rise-and-fall motion and graceful, flowing rotary movements.",
-    # Optional: if your model has these classes, you can add descriptions:
     "Samba": "Samba is a lively Brazilian dance characterized by fast footwork, hip action, and rhythmic bounce, typically performed to upbeat samba music.",
     "Tango": "Tango is a dramatic partner dance originating from Argentina, marked by sharp movements, close embrace, and expressive leg actions."
 }
 
-# --- Configuration ---
+# --- Configuration (MODIFIED FOR S3) ---
 MODEL_DIR = "model"
-UPLOAD_DIR = "uploads"
-TMP_DIR = "tmp"
-FRAMES_DIR = os.path.join(TMP_DIR, "frames")
-ANNOTATED_FRAMES_DIR = os.path.join(TMP_DIR, "annotated_frames")
-PLOTS_DIR = os.path.join(TMP_DIR, "plots")
-PLOTS_DIR = os.path.abspath(PLOTS_DIR)
-print("PLOTS_DIR =", PLOTS_DIR)
+# We define TMP_DIR for local download/processing (Ephemeral FS)
+TMP_DIR = "tmp" 
 
-# Flask setup
-app = Flask(__name__, static_folder='static')
+# --- AWS S3 CONFIGURATION (Credentials loaded from Vercel/Render Env Vars) ---
+S3_BUCKET = os.environ.get("S3_BUCKET_NAME") 
+# IMPORTANT: CHANGE THIS TO YOUR BUCKET'S REGION (e.g., 'us-east-1')
+S3_REGION = 'ap-south-1' 
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(TMP_DIR, exist_ok=True)
-os.makedirs(PLOTS_DIR, exist_ok=True)
-os.makedirs(ANNOTATED_FRAMES_DIR, exist_ok=True)
-os.makedirs(FRAMES_DIR, exist_ok=True)
+# Flask setup (Removed static_folder='static' for Vercel)
+app = Flask(__name__)
+
+# Initialize Boto3 S3 client
+s3_client = None
+if S3_BUCKET:
+    s3_client = boto3.client(
+        's3',
+        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        region_name=S3_REGION
+    )
+    print("✅ AWS S3 client initialized.")
+else:
+    print("⚠️ S3_BUCKET_NAME not set. S3 features disabled. Local file storage will fail.")
+
+# DELETED ALL os.makedirs calls for UPLOAD_DIR, TMP_DIR, PLOTS_DIR, etc.
 
 # --- MediaPipe ---
 mp_pose = mp.solutions.pose
@@ -94,7 +107,7 @@ def extract_image_features_for_descriptor(img_bgr: np.ndarray) -> np.ndarray:
         [hsv],
         [0, 1, 2],
         None,
-        [4, 4, 4],                # 64 dims
+        [4, 4, 4],  # 64 dims
         [0, 180, 0, 256, 0, 256]
     )
     hist = cv2.normalize(hist, hist).flatten().astype(np.float32)
@@ -124,14 +137,14 @@ def extract_features_from_frame(frame, pose_estimator, hand_estimator, mp_pose_m
     """
     Returns (feature_vector or None, annotated_frame).
     Must produce EXACT 230 dims:
-      Pose vector:        66
-      Angles:             8
-      Left hand:          42
-      Right hand:         42
-      Image histogram:    64
-      Edge histogram:     8
-      -----------------------
-      TOTAL =            230 dims
+        Pose vector:        66
+        Angles:             8
+        Left hand:          42
+        Right hand:         42
+        Image histogram:    64
+        Edge histogram:     8
+        -----------------------
+        TOTAL =            230 dims
     """
     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pose_results = pose_estimator.process(img_rgb)
@@ -161,7 +174,7 @@ def extract_features_from_frame(frame, pose_estimator, hand_estimator, mp_pose_m
     pose_coords -= hip
     torso = np.linalg.norm(pose_coords[11] - pose_coords[23]) + 1e-6
     pose_coords /= torso
-    pose_vec = pose_coords.flatten()   # 66
+    pose_vec = pose_coords.flatten()  # 66
 
     # Angles ----------
     def angle(a, b, c):
@@ -219,23 +232,16 @@ def extract_features_from_frame(frame, pose_estimator, hand_estimator, mp_pose_m
     return final, annotated_frame
 
 
-# --- Prediction Logic (Turbo mode) ---
+# --- Prediction Logic (S3 integrated) ---
 def predict_video(video_path, start_time, end_time, stride=12):
     """
-    Turbo mode:
-      - model_complexity=0 (faster)
-      - max_num_hands=1
-      - stride=12 (process every 12th frame)
-      - still uses same 230-dim descriptor & XGBoost model
+    Predicts dance style from a video file path.
+    The file path is now a temporary local file downloaded from S3.
     """
     if not all([clf is not None, label_encoder is not None, scaler is not None, expected_dim]):
         return "Model not loaded.", None, None, None, None, None
 
-    # Clean temp dirs (ONLY tmp/, not dataset)
-    for d in [FRAMES_DIR, ANNOTATED_FRAMES_DIR, PLOTS_DIR]:
-        if os.path.exists(d):
-            shutil.rmtree(d, ignore_errors=True)
-        os.makedirs(d, exist_ok=True)
+    # DELETED LOCAL DIR CLEANUP (shutil.rmtree)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -326,25 +332,40 @@ def predict_video(video_path, start_time, end_time, stride=12):
 
     best_raw_frame_url = None
     best_annotated_frame_url = None
+    plot_name = None # Will hold the S3 URL
+    timeline_name = None # Will hold the S3 URL
+    pose_overlay_name = None 
+    label_slug = label.lower().replace(" ", "-") # Define slug once
 
-    if best_frame_data['index'] != -1:
+    # --- S3 Upload for Best Frame Images ---
+    if best_frame_data['index'] != -1 and s3_client:
         best_frame_idx = best_frame_data['index']
 
-        raw_frame_path = os.path.join(
-            FRAMES_DIR, f"frame_{best_frame_idx:06d}.jpg"
+        # 1. Save Raw Frame to S3
+        raw_key = f"tmp/{label_slug}/{uuid.uuid4()}_frame_raw.jpg"
+        _, raw_img_encoded = cv2.imencode('.jpg', best_frame_data['raw_frame'], [cv2.IMWRITE_JPEG_QUALITY, 90])
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=raw_key,
+            Body=raw_img_encoded.tobytes(),
+            ContentType='image/jpeg'
         )
-        ann_frame_path = os.path.join(
-            ANNOTATED_FRAMES_DIR,
-            f"frame_{best_frame_idx:06d}_annotated.jpg",
+        best_raw_frame_url = f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{raw_key}"
+
+
+        # 2. Save Annotated Frame to S3
+        ann_key = f"tmp/{label_slug}/{uuid.uuid4()}_frame_annotated.jpg"
+        _, ann_img_encoded = cv2.imencode('.jpg', best_frame_data['annotated_frame'], [cv2.IMWRITE_JPEG_QUALITY, 90])
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=ann_key,
+            Body=ann_img_encoded.tobytes(),
+            ContentType='image/jpeg'
         )
+        best_annotated_frame_url = f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{ann_key}"
 
-        cv2.imwrite(raw_frame_path, best_frame_data['raw_frame'])
-        cv2.imwrite(ann_frame_path, best_frame_data['annotated_frame'])
 
-        best_raw_frame_url = raw_frame_path.replace("\\", "/")
-        best_annotated_frame_url = ann_frame_path.replace("\\", "/")
-
-    # --- Average probabilities bar chart ---
+    # --- Average probabilities bar chart (S3 Upload) ---
     avg_probs = np.mean(probs_list, axis=0) * 100
     all_classes = label_encoder.classes_
 
@@ -377,22 +398,29 @@ def predict_video(video_path, start_time, end_time, stride=12):
         )
 
     plt.tight_layout()
-    plot_name = "average_confidence_chart.png"
-    plot_path = os.path.join(PLOTS_DIR, plot_name)
-    plt.savefig(plot_path)
-    plt.close()
+    
+    # Upload Bar Chart to S3
+    if s3_client:
+        plot_key = f"plots/{label_slug}/{uuid.uuid4()}_avg_confidence_chart.png"
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        buf.seek(0)
+        plt.close()
 
-    # --- Timeline plot (top-1 + top-2 class) ---
-    pose_overlay_name = None
-    timeline_name = None
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=plot_key,
+            Body=buf.read(),
+            ContentType='image/png'
+        )
+        plot_name = f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{plot_key}"
+    else:
+        plt.close() # Still close the plot if S3 failed
 
+
+    # --- Timeline plot (S3 Upload) ---
     if frame_meta:
-        timeline_name = "confidence_timeline.png"
-        timeline_path = os.path.join(PLOTS_DIR, timeline_name)
-
         times = [idx / fps for idx, _ in frame_meta]
-
-        # main predicted class confidence
         main_conf = [p[final_pred_idx] * 100 for _, p in frame_meta]
 
         # second-best class confidence
@@ -420,8 +448,24 @@ def predict_video(video_path, start_time, end_time, stride=12):
         plt.title("Prediction Confidence Over Time")
         plt.legend()
         plt.tight_layout()
-        plt.savefig(timeline_path)
-        plt.close()
+        
+        # Upload Timeline Chart to S3
+        if s3_client:
+            timeline_key = f"plots/{label_slug}/{uuid.uuid4()}_confidence_timeline.png"
+            timeline_buf = io.BytesIO()
+            plt.savefig(timeline_buf, format='png')
+            timeline_buf.seek(0)
+            plt.close()
+            
+            s3_client.put_object(
+                Bucket=S3_BUCKET,
+                Key=timeline_key,
+                Body=timeline_buf.read(),
+                ContentType='image/png'
+            )
+            timeline_name = f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{timeline_key}"
+        else:
+            plt.close()
 
     print(f"Frames with detections: {detected_frames}, skipped (dim mismatch): {skipped_dim}")
 
@@ -450,16 +494,52 @@ def predict():
     if not f or f.filename == "":
         return "No file uploaded", 400
 
+    # Vercel's Serverless function is constrained by the 60-second timeout.
+    # Video processing must happen fast!
+    
     try:
         start_time = float(start_str)
         end_time = float(end_str)
     except ValueError:
         return "Invalid trim times provided.", 400
 
-    filename = secure_filename(f.filename)
-    save_path = os.path.join(UPLOAD_DIR, filename)
-    f.save(save_path)
+    # Initialize variables for cleanup
+    local_temp_path = None
+    temp_video_key = None
+    video_path_for_opencv = None
+    
+    if not s3_client:
+        return "Error: S3 Client not initialized. Deployment setup incomplete.", 500
 
+    # 1. Upload Video to S3 (Temporary Storage)
+    try:
+        # Save the file object directly to S3
+        temp_video_key = f"uploads/{secure_filename(f.filename)}_{uuid.uuid4()}.mp4"
+        f.seek(0) # Reset file pointer for S3 upload
+        
+        s3_client.put_object(
+            Bucket=S3_BUCKET,
+            Key=temp_video_key,
+            Body=f.read(),
+            ContentType=f.content_type or 'video/mp4'
+        )
+    except Exception as e:
+        return f"Error uploading video to S3: {e}", 500
+    
+    # 2. Download from S3 to a local temp file for OpenCV
+    # OpenCV's VideoCapture needs a filesystem path, which is volatile on Vercel.
+    local_temp_path = os.path.join(TMP_DIR, f"{uuid.uuid4()}_{secure_filename(f.filename)}")
+    
+    # MUST re-create TMP_DIR here, as the ephemeral FS clears it.
+    try:
+        os.makedirs(TMP_DIR, exist_ok=True)
+        s3_client.download_file(S3_BUCKET, temp_video_key, local_temp_path)
+        video_path_for_opencv = local_temp_path
+    except Exception as e:
+        return f"Error downloading video from S3 for processing: {e}", 500
+
+
+    # 3. Run Prediction using the local temporary file
     (
         label,
         plot_name,
@@ -467,15 +547,25 @@ def predict():
         best_annotated_frame,
         pose_overlay_name,
         timeline_name,
-    ) = predict_video(save_path, start_time, end_time)
+    ) = predict_video(video_path_for_opencv, start_time, end_time)
+
+    # 4. Cleanup: Delete the local temp video file and the S3 object
+    try:
+        if local_temp_path and os.path.exists(local_temp_path):
+            os.remove(local_temp_path)
+            print("Local temp video file deleted.")
+        
+        if s3_client and temp_video_key:
+            s3_client.delete_object(Bucket=S3_BUCKET, Key=temp_video_key)
+            print("S3 temp video file deleted.")
+            
+    except Exception as e:
+        print(f"Cleanup failed: {e}")
 
     description = DANCE_DESCRIPTIONS.get(
         str(label),
         "No description available for this dance form."
     )
-
-    if os.path.exists(save_path):
-        os.remove(save_path)
 
     return render_template(
         "result.html",
@@ -489,26 +579,9 @@ def predict():
     )
 
 
-@app.route('/<path:filename>')
-def serve_tmp(filename):
-    # Serve files under tmp/ (frames, annotated_frames)
-    if filename.startswith(TMP_DIR + '/'):
-        dir_name = os.path.dirname(filename)
-        base_name = os.path.basename(filename)
-        return send_from_directory(dir_name, base_name)
-    return "File not found.", 404
+# --- DELETED LOCAL FILE SERVING ROUTES ---
+# The /serve_tmp and /serve_plots routes are removed as images/plots are served directly from S3 URLs.
 
-
-@app.route('/plots/<path:filename>')
-def serve_plots(filename):
-    abs_dir = os.path.abspath(PLOTS_DIR)
-    abs_file = os.path.join(abs_dir, filename)
-    print(">>> trying to serve", abs_file)
-    if not os.path.exists(abs_file):
-        print("!!! file missing")
-        return "not found", 404
-    return send_from_directory(abs_dir, filename, as_attachment=False)
-
-
+# Vercel does not use this block to run the app
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
