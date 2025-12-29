@@ -1,4 +1,6 @@
-# Python
+# =========================
+# Python / Virtual Envs
+# =========================
 .venv/
 venv/
 env/
@@ -10,15 +12,16 @@ __pycache__/
 *.dll
 *.log
 
-# Project artifacts
+# =========================
+# ML / Project Artifacts
+# =========================
 model/
 models/
 features/
 uploads/
 tmp/
-dataset/
-dataset_landmarks
 data/
+
 *.pkl
 *.onnx
 *.tflite
@@ -28,7 +31,30 @@ data/
 *.mp4
 *.avi
 
-# OS/IDE
+# =========================
+# DATASET CONTROL (IMPORTANT)
+# =========================
+
+# Ignore everything in dataset by default
+dataset/*
+dataset_landmarks/*
+
+# Allow dataset root
+!dataset/
+
+# Allow ONLY selected dance datasets
+!dataset/Kathak/
+!dataset/Bharatanatyam/
+!dataset/Ballet/
+!dataset/HipHop/
+!dataset/Garba/
+
+# (Optional) keep folders even if empty
+dataset/**/.keep
+
+# =========================
+# OS / IDE junk
+# =========================
 .DS_Store
 Thumbs.db
 .vscode/
